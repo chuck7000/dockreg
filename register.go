@@ -3,7 +3,8 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/coreos/go-etcd/etcd"
+	"github.com/coreos/etcd/Godeps/_workspace/src/golang.org/x/net/context"
+	"github.com/coreos/etcd/client"
 	"log"
 	"os"
 	"os/signal"
@@ -12,32 +13,36 @@ import (
 	"time"
 )
 
-const ttl = 20
+const ttl = 20 *time.Second
 const dialTimeout = 3 * time.Second
 const rwTimeout = 3 * time.Second
 const loop = 5 * time.Second
 
+
 var hostname, _ = os.Hostname()
-var etcdCli *etcd.Client
+var kapi client.KeysAPI
+var setOpts = &client.SetOptions{ TTL: ttl }
 var httpCli = NewTimeoutClient(dialTimeout, rwTimeout)
 
-
 func reg(key, hostPort, hostIp string) {
-	_, err := etcdCli.Set(fmt.Sprintf("%v/%v:%v", key, hostIp, hostPort), "running", uint64(ttl))
+	_, err := kapi.Set(context.Background(), fmt.Sprintf("%v/%v:%v", key, hostIp, hostPort), "running", setOpts)
 	if err != nil {
 		log.Println(err)
 	}
 }
 
 func unreg(key, hostPort, hostIp string) {
-	etcdCli.Delete(fmt.Sprintf("%v/%v:%v", key, hostIp, hostPort), true)
+	_, err := kapi.Delete(context.Background(), fmt.Sprintf("%v/%v:%v", key, hostIp, hostPort), nil)
+	if err != nil {
+		log.Println(err)
+	}
 }
 
 func healthCheck(localPort, localHosttoCheck string) bool {
 	hostCheck := fmt.Sprintf("http://%v:", localHosttoCheck)
 	resp, err := httpCli.Get(hostCheck + localPort)
 	if err != nil {
-		log.Printf("Cannot access to %v", hostCheck +localPort+" : %v\n", err)
+		log.Printf("Cannot access to %v", hostCheck+localPort+" : %v\n", err)
 		return false
 	} else {
 		defer resp.Body.Close()
@@ -64,7 +69,21 @@ func main() {
 	hostname, _ = os.Hostname()
 
 	// Create a client for etcd
-	etcdCli = etcd.NewClient(etcdServers)
+	//etcdCli = etcd.NewClient(etcdServers)
+  
+  cfg := client.Config{
+    Endpoints: etcdServers,
+    Transport: client.DefaultTransport,
+    HeaderTimeoutPerRequest: time.Second,
+  }
+  
+  c, err := client.New(cfg)
+  
+  if err != nil {
+    log.Fatal(err)
+  }
+  
+  kapi = client.NewKeysAPI(c)
 
 	// Get container info through Docker API
 	port, _ := getPublicPort(*pDockerSock, hostname, *pLocalPort)
